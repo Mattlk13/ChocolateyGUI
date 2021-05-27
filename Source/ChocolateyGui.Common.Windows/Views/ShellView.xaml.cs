@@ -37,6 +37,7 @@ namespace ChocolateyGui.Common.Windows.Views
         private bool _closeInitiated = false;
 
         public ShellView(
+            IDialogService dialogService,
             IProgressService progressService,
             IChocolateyConfigurationProvider chocolateyConfigurationProvider,
             IConfigService configService,
@@ -45,11 +46,8 @@ namespace ChocolateyGui.Common.Windows.Views
         {
             InitializeComponent();
 
-            var service = progressService as ProgressService;
-            if (service != null)
-            {
-                service.ShellView = this;
-            }
+            dialogService.ShellView = this;
+            progressService.ShellView = this;
 
             _progressService = progressService;
             _chocolateyConfigurationProvider = chocolateyConfigurationProvider;
@@ -96,7 +94,7 @@ namespace ChocolateyGui.Common.Windows.Views
             return Dispatcher.Invoke(async () =>
             {
                 // create the dialog control
-                var dialog = new ChocolateyDialog(this, _configService.GetAppConfiguration().ShowConsoleOutput)
+                var dialog = new ChocolateyDialog(this, _configService.GetEffectiveConfiguration().ShowConsoleOutput ?? false)
                 {
                     Title = title,
                     IsCancelable = isCancelable,

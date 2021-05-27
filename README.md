@@ -38,11 +38,11 @@ Or, you can find us in IRC at #chocolatey.
 
 ### Documentation
 
-You can find information about Chocolatey GUI here: [https://chocolatey.github.io/ChocolateyGUI/](https://chocolatey.github.io/ChocolateyGUI/)
+You can find information about Chocolatey GUI here: [https://docs.chocolatey.org/en-us/chocolatey-gui/](https://docs.chocolatey.org/en-us/chocolatey-gui/)
 
 ### Requirements
 
-* .NET Framework 4.5.2
+* .NET Framework 4.8
 * Should work on all Windows Operating Systems from Windows 7 SP1 and above, and Windows Server 2008 R2 SP1 and above
 
 ### License / Credits
@@ -77,15 +77,19 @@ If you would like to contribute code or help squash a bug or two, that's awesome
 
 ### Building
 
-* It is assumed that a version of Visual Studio 2017 is already installed on the machine being used to complete the build
-  * Visual Studio 2017 shipped with an MSBuild Tool Version for 2015, if you don't have 2017 installed, and, for example, only have Visual Studio 2019 installed, then it is likely that the build will fail.
-  * In this situation, you have two choices
-    * Install the Microsoft Build Tools for 2015.  This can be done using the following command `choco install microsoft-build-tools --version 14.0.25420.1`
-    * Uncomment the line in the recipe.cake file that contains `buildMSBuildToolVersion: MSBuildToolVersion.VS2019` and comment the line above it
+* It is assumed that a version of Visual Studio 2019 is already installed on the machine being used to complete the build.
 * `choco install wixtoolset -y`
-* Install WiX toolset integration for your Visual Studio Integration from [here](https://wixtoolset.org/releases/) 
-* **OPTIONAL:** If you have Visual Studio 2017 installed, you may need to set `FXCOPDIR` environment variable. You can typically find that at `"C:\Program Files (x86)\Microsoft Visual Studio\2017\<sku>\Team Tools\Static Analysis Tools\FxCop\FxCopCmd.exe"`. Run something like `[Environment]::SetEnvironmentVariable("FXCOPDIR","C:\Program Files (x86)\Microsoft Visual Studio\2017\Enterprise\Team Tools\Static Analysis Tools\FxCop", 'User')` (for build machines, use `Machine` instead of `User`).
-* From and Administrative PowerShell Window, navigate to the folder where you have cloned the Chocolatey GUI repository and run `build.ps1`, this will run Cake and it will go through the build script.
+* **OPTIONAL:** Set `FXCOPDIR` environment variable, which can be set using [vswhere](https://chocolatey.org/packages/vswhere) and the following command:
+   ```ps1
+   $FXCOPDIR = vswhere -products * -latest -prerelease -find **/FxCopCmd.exe
+   [Environment]::SetEnvironmentVariable("FXCOPDIR", $FXCOPDIR, 'User')
+   refreshenv
+   ```
+* Install WiX toolset integration for your Visual Studio Integration from [here](https://marketplace.visualstudio.com/items?itemName=WixToolset.WixToolsetVisualStudio2019Extension)
+* From and **Administrative** PowerShell Window, navigate to the folder where you have cloned the Chocolatey GUI repository and run `build.ps1`, this will run Cake and it will go through the build script.
+  ```
+  ./build.ps1
+  ```
 
 ### Localization
 
@@ -106,4 +110,4 @@ Committers, you should be very familiar with [COMMITTERS](https://github.com/cho
 
 ## Credits
 
-Chocolatey GUI is brought to you by quite a few people and frameworks. See [CREDITS](https://github.com/chocolatey/chocolateygui/blob/develop/docs/input/credits.md) (just input/credits.md in the zip folder)
+Chocolatey GUI is brought to you by quite a few people and frameworks. See [CREDITS](https://github.com/chocolatey/chocolateygui/blob/develop/CREDITS.md) (just CREDITS.md in the zip folder)

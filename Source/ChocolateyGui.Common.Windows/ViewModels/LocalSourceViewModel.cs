@@ -29,6 +29,7 @@ using ChocolateyGui.Common.ViewModels;
 using ChocolateyGui.Common.ViewModels.Items;
 using ChocolateyGui.Common.Windows.Services;
 using ChocolateyGui.Common.Windows.Utilities.Extensions;
+using MahApps.Metro.Controls.Dialogs;
 using Serilog;
 
 namespace ChocolateyGui.Common.Windows.ViewModels
@@ -40,8 +41,10 @@ namespace ChocolateyGui.Common.Windows.ViewModels
         private readonly List<IPackageViewModel> _packages;
         private readonly IPersistenceService _persistenceService;
         private readonly IChocolateyGuiCacheService _chocolateyGuiCacheService;
+        private readonly IDialogService _dialogService;
         private readonly IProgressService _progressService;
         private readonly IConfigService _configService;
+        private readonly IAllowedCommandsService _allowedCommandsService;
         private readonly IEventAggregator _eventAggregator;
         private readonly IMapper _mapper;
         private bool _exportAll = true;
@@ -60,19 +63,23 @@ namespace ChocolateyGui.Common.Windows.ViewModels
 
         public LocalSourceViewModel(
             IChocolateyService chocolateyService,
+            IDialogService dialogService,
             IProgressService progressService,
             IPersistenceService persistenceService,
             IChocolateyGuiCacheService chocolateyGuiCacheService,
             IConfigService configService,
+            IAllowedCommandsService allowedCommandsService,
             IEventAggregator eventAggregator,
             string displayName,
             IMapper mapper)
         {
             _chocolateyService = chocolateyService;
+            _dialogService = dialogService;
             _progressService = progressService;
             _persistenceService = persistenceService;
             _chocolateyGuiCacheService = chocolateyGuiCacheService;
             _configService = configService;
+            _allowedCommandsService = allowedCommandsService;
 
             DisplayName = displayName;
 
@@ -165,39 +172,51 @@ namespace ChocolateyGui.Common.Windows.ViewModels
             set { this.SetPropertyValue(ref _firstLoadIncomplete, value); }
         }
 
+        public bool IsUpgradeAllowed
+        {
+            get { return _allowedCommandsService.IsUpgradeCommandAllowed; }
+        }
+
         public bool CanUpdateAll()
         {
-            return Packages.Any(p => p.CanUpdate);
+            return Packages.Any(p => p.CanUpdate) && _allowedCommandsService.IsUpgradeCommandAllowed;
         }
 
         public async void UpdateAll()
         {
             try
             {
-                await _progressService.StartLoading(Resources.LocalSourceViewModel_Packages, true);
-                IsLoading = true;
+                var result = await _dialogService.ShowConfirmationMessageAsync(
+                    Resources.Dialog_AreYouSureTitle,
+                    Resources.Dialog_AreYouSureUpdateAllMessage);
 
-                _progressService.WriteMessage(Resources.LocalSourceViewModel_FetchingPackages);
-                var token = _progressService.GetCancellationToken();
-                var packages = Packages.Where(p => p.CanUpdate && !p.IsPinned).ToList();
-                double current = 0.0f;
-                foreach (var package in packages)
+                if (result == MessageDialogResult.Affirmative)
                 {
-                    if (token.IsCancellationRequested)
+                    await _progressService.StartLoading(Resources.LocalSourceViewModel_Packages, true);
+                    IsLoading = true;
+
+                    _progressService.WriteMessage(Resources.LocalSourceViewModel_FetchingPackages);
+                    var token = _progressService.GetCancellationToken();
+                    var packages = Packages.Where(p => p.CanUpdate && !p.IsPinned).ToList();
+                    double current = 0.0f;
+                    foreach (var package in packages)
                     {
-                        await _progressService.StopLoading();
-                        IsLoading = false;
-                        return;
+                        if (token.IsCancellationRequested)
+                        {
+                            await _progressService.StopLoading();
+                            IsLoading = false;
+                            return;
+                        }
+
+                        _progressService.Report(Math.Min(current++ / packages.Count, 100));
+                        await package.Update();
                     }
 
-                    _progressService.Report(Math.Min(current++ / packages.Count, 100));
-                    await package.Update();
+                    await _progressService.StopLoading();
+                    IsLoading = false;
+                    ShowOnlyPackagesWithUpdate = false;
+                    RefreshPackages();
                 }
-
-                await _progressService.StopLoading();
-                IsLoading = false;
-                ShowOnlyPackagesWithUpdate = false;
-                RefreshPackages();
             }
             catch (Exception ex)
             {
@@ -323,8 +342,8 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                     return;
                 }
 
-                ListViewMode = _configService.GetAppConfiguration().DefaultToTileViewForLocalSource ? ListViewMode.Tile : ListViewMode.Standard;
-                ShowAdditionalPackageInformation = _configService.GetAppConfiguration().ShowAdditionalPackageInformation;
+                ListViewMode = _configService.GetEffectiveConfiguration().DefaultToTileViewForLocalSource ?? true ? ListViewMode.Tile : ListViewMode.Standard;
+                ShowAdditionalPackageInformation = _configService.GetEffectiveConfiguration().ShowAdditionalPackageInformation ?? false;
 
                 Observable.FromEventPattern<EventArgs>(_configService, "SettingsChanged")
                     .ObserveOnDispatcher()
@@ -332,10 +351,10 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                     {
                         var appConfig = (AppConfiguration)eventPattern.Sender;
 
-                        ListViewMode = appConfig.DefaultToTileViewForLocalSource
+                        ListViewMode = appConfig.DefaultToTileViewForLocalSource ?? false
                                 ? ListViewMode.Tile
                                 : ListViewMode.Standard;
-                        ShowAdditionalPackageInformation = appConfig.ShowAdditionalPackageInformation;
+                        ShowAdditionalPackageInformation = appConfig.ShowAdditionalPackageInformation ?? false;
                     });
 
                 await LoadPackages();
@@ -370,10 +389,10 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                 var chocoPackage = _packages.FirstOrDefault(p => p.Id.ToLower() == "chocolatey");
                 if (chocoPackage != null && chocoPackage.CanUpdate)
                 {
-#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-                    _progressService.ShowMessageAsync(Resources.LocalSourceViewModel_Chocolatey, Resources.LocalSourceViewModel_UpdateAvailableForChocolatey)
+                    await _dialogService.ShowMessageAsync(
+                            Resources.LocalSourceViewModel_Chocolatey,
+                            Resources.LocalSourceViewModel_UpdateAvailableForChocolatey)
                         .ConfigureAwait(false);
-#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 }
             }
             catch (Exception ex)
@@ -472,7 +491,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                 // outdated packages. We should only enable the checkbox here when: (or)
                 // 1. the "Prevent Automated Outdated Packages Check" is disabled
                 // 2. forced a check for outdated packages.
-                IsShowOnlyPackagesWithUpdateEnabled = !_configService.GetAppConfiguration().PreventAutomatedOutdatedPackagesCheck || forceCheckForOutdated;
+                IsShowOnlyPackagesWithUpdateEnabled = forceCheckForOutdated || !(_configService.GetEffectiveConfiguration().PreventAutomatedOutdatedPackagesCheck ?? false);
 
                 // Force invalidating the command stuff.
                 // This helps us to prevent disabled buttons after executing this routine.

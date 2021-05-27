@@ -35,6 +35,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
     {
         private static readonly ILogger Logger = Log.ForContext<RemoteSourceViewModel>();
         private readonly IChocolateyService _chocolateyPackageService;
+        private readonly IDialogService _dialogService;
         private readonly IProgressService _progressService;
         private readonly IChocolateyGuiCacheService _chocolateyGuiCacheService;
         private readonly IConfigService _configService;
@@ -58,6 +59,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
 
         public RemoteSourceViewModel(
             IChocolateyService chocolateyPackageService,
+            IDialogService dialogService,
             IProgressService progressService,
             IChocolateyGuiCacheService chocolateyGuiCacheService,
             IConfigService configService,
@@ -67,6 +69,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
         {
             Source = source;
             _chocolateyPackageService = chocolateyPackageService;
+            _dialogService = dialogService;
             _progressService = progressService;
             _chocolateyGuiCacheService = chocolateyGuiCacheService;
             _configService = configService;
@@ -249,7 +252,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                     return;
                 }
 
-                if (!HasLoaded && _configService.GetAppConfiguration().PreventPreload)
+                if (!HasLoaded && (_configService.GetEffectiveConfiguration().PreventPreload ?? false))
                 {
                     ShowShouldPreventPreloadMessage = true;
                     HasLoaded = true;
@@ -299,7 +302,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                         Packages.Add(Mapper.Map<IPackageViewModel>(p));
                     });
 
-                    if (_configService.GetAppConfiguration().ExcludeInstalledPackages)
+                    if (_configService.GetEffectiveConfiguration().ExcludeInstalledPackages ?? false)
                     {
                         Packages.RemoveAll(x => x.IsInstalled);
                     }
@@ -320,7 +323,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
             catch (Exception ex)
             {
                 Logger.Error(ex, "Failed to load new packages.");
-                await _progressService.ShowMessageAsync(
+                await _dialogService.ShowMessageAsync(
                     Resources.RemoteSourceViewModel_FailedToLoad,
                     string.Format(Resources.RemoteSourceViewModel_FailedToLoadRemotePackages, ex.Message));
                 throw;
@@ -347,8 +350,8 @@ namespace ChocolateyGui.Common.Windows.ViewModels
         {
             try
             {
-                ListViewMode = _configService.GetAppConfiguration().DefaultToTileViewForRemoteSource ? ListViewMode.Tile : ListViewMode.Standard;
-                ShowAdditionalPackageInformation = _configService.GetAppConfiguration().ShowAdditionalPackageInformation;
+                ListViewMode = _configService.GetEffectiveConfiguration().DefaultToTileViewForRemoteSource ?? true ? ListViewMode.Tile : ListViewMode.Standard;
+                ShowAdditionalPackageInformation = _configService.GetEffectiveConfiguration().ShowAdditionalPackageInformation ?? false;
 
                 Observable.FromEventPattern<EventArgs>(_configService, "SettingsChanged")
                     .ObserveOnDispatcher()
@@ -357,13 +360,13 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                         var appConfig = (AppConfiguration)eventPattern.Sender;
 
                         _searchQuerySubscription?.Dispose();
-                        if (appConfig.UseDelayedSearch)
+                        if (appConfig.UseDelayedSearch ?? false)
                         {
                             SubscribeToLoadPackagesOnSearchQueryChange();
                         }
 
-                        ListViewMode = appConfig.DefaultToTileViewForRemoteSource ? ListViewMode.Tile : ListViewMode.Standard;
-                        ShowAdditionalPackageInformation = appConfig.ShowAdditionalPackageInformation;
+                        ListViewMode = appConfig.DefaultToTileViewForRemoteSource ?? false ? ListViewMode.Tile : ListViewMode.Standard;
+                        ShowAdditionalPackageInformation = appConfig.ShowAdditionalPackageInformation ?? false;
                     });
 
 #pragma warning disable 4014
@@ -375,7 +378,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                     "IncludeAllVersions", "IncludePrerelease", "MatchWord", "SortSelection"
                 };
 
-                if (_configService.GetAppConfiguration().UseDelayedSearch)
+                if (_configService.GetEffectiveConfiguration().UseDelayedSearch ?? false)
                 {
                     SubscribeToLoadPackagesOnSearchQueryChange();
                 }

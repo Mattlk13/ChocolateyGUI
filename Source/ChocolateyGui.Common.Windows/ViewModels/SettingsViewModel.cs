@@ -7,11 +7,13 @@
 
 using System;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using Caliburn.Micro;
 using chocolatey.infrastructure.filesystem;
 using ChocolateyGui.Common.Models;
@@ -19,6 +21,7 @@ using ChocolateyGui.Common.Models.Messages;
 using ChocolateyGui.Common.Properties;
 using ChocolateyGui.Common.Services;
 using ChocolateyGui.Common.Windows.Services;
+using ChocolateyGui.Common.Windows.Theming;
 using ChocolateyGui.Common.Windows.Utilities.Extensions;
 using MahApps.Metro.Controls.Dialogs;
 using ChocolateySource = ChocolateyGui.Common.Models.ChocolateySource;
@@ -30,10 +33,10 @@ namespace ChocolateyGui.Common.Windows.ViewModels
         private const string ChocolateyLicensedSourceId = "chocolatey.licensed";
         private readonly IChocolateyService _chocolateyService;
 
+        private readonly IDialogService _dialogService;
         private readonly IProgressService _progressService;
         private readonly IConfigService _configService;
         private readonly IEventAggregator _eventAggregator;
-        private readonly IDialogCoordinator _dialogCoordinator;
         private readonly IChocolateyGuiCacheService _chocolateyGuiCacheService;
         private readonly IFileSystem _fileSystem;
 
@@ -46,26 +49,95 @@ namespace ChocolateyGui.Common.Windows.ViewModels
         private ChocolateySource _draftSource;
         private string _originalId;
         private bool _isNewItem;
+        private string _chocolateyGuiFeatureSearchQuery;
+        private string _chocolateyGuiSettingSearchQuery;
+        private string _chocolateyFeatureSearchQuery;
+        private string _chocolateySettingsSearchQuery;
 
         public SettingsViewModel(
             IChocolateyService chocolateyService,
+            IDialogService dialogService,
             IProgressService progressService,
             IConfigService configService,
             IEventAggregator eventAggregator,
-            IDialogCoordinator dialogCoordinator,
             IChocolateyGuiCacheService chocolateyGuiCacheService,
             IFileSystem fileSystem)
         {
             _chocolateyService = chocolateyService;
+            _dialogService = dialogService;
             _progressService = progressService;
             _configService = configService;
             _eventAggregator = eventAggregator;
-            _dialogCoordinator = dialogCoordinator;
             _chocolateyGuiCacheService = chocolateyGuiCacheService;
             _fileSystem = fileSystem;
             DisplayName = Resources.SettingsViewModel_DisplayName;
             Activated += OnActivated;
             Deactivated += OnDeactivated;
+
+            ChocolateyGuiFeaturesView.Filter = new Predicate<object>(o => FilterChocolateyGuiFeatures(o as ChocolateyGuiFeature));
+            ChocolateyGuiSettingsView.Filter = new Predicate<object>(o => FilterChocolateyGuiSettings(o as ChocolateyGuiSetting));
+            ChocolateyFeaturesView.Filter = new Predicate<object>(o => FilterChocolateyFeatures(o as ChocolateyFeature));
+            ChocolateySettingsView.Filter = new Predicate<object>(o => FilterChocolateySettings(o as ChocolateySetting));
+        }
+
+        public string ChocolateyGuiFeatureSearchQuery
+        {
+            get
+            {
+                return _chocolateyGuiFeatureSearchQuery;
+            }
+
+            set
+            {
+                _chocolateyGuiFeatureSearchQuery = value;
+                NotifyOfPropertyChange(nameof(ChocolateyGuiFeatureSearchQuery));
+                ChocolateyGuiFeaturesView.Refresh();
+            }
+        }
+
+        public string ChocolateyGuiSettingSearchQuery
+        {
+            get
+            {
+                return _chocolateyGuiSettingSearchQuery;
+            }
+
+            set
+            {
+                _chocolateyGuiSettingSearchQuery = value;
+                NotifyOfPropertyChange(nameof(ChocolateyGuiSettingSearchQuery));
+                ChocolateyGuiSettingsView.Refresh();
+            }
+        }
+
+        public string ChocolateyFeatureSearchQuery
+        {
+            get
+            {
+                return _chocolateyFeatureSearchQuery;
+            }
+
+            set
+            {
+                _chocolateyFeatureSearchQuery = value;
+                NotifyOfPropertyChange(nameof(ChocolateyFeatureSearchQuery));
+                ChocolateyFeaturesView.Refresh();
+            }
+        }
+
+        public string ChocolateySettingSearchQuery
+        {
+            get
+            {
+                return _chocolateySettingsSearchQuery;
+            }
+
+            set
+            {
+                _chocolateySettingsSearchQuery = value;
+                NotifyOfPropertyChange(nameof(ChocolateySettingSearchQuery));
+                ChocolateySettingsView.Refresh();
+            }
         }
 
         public ObservableCollection<ChocolateyGuiFeature> ChocolateyGuiFeatures { get; } = new ObservableCollection<ChocolateyGuiFeature>();
@@ -77,6 +149,26 @@ namespace ChocolateyGui.Common.Windows.ViewModels
         public ObservableCollection<ChocolateySetting> ChocolateySettings { get; } = new ObservableCollection<ChocolateySetting>();
 
         public ObservableCollection<ChocolateySource> Sources { get; } = new ObservableCollection<ChocolateySource>();
+
+        public ICollectionView ChocolateyGuiFeaturesView
+        {
+            get { return CollectionViewSource.GetDefaultView(ChocolateyGuiFeatures); }
+        }
+
+        public ICollectionView ChocolateyGuiSettingsView
+        {
+            get { return CollectionViewSource.GetDefaultView(ChocolateyGuiSettings); }
+        }
+
+        public ICollectionView ChocolateyFeaturesView
+        {
+            get { return CollectionViewSource.GetDefaultView(ChocolateyFeatures); }
+        }
+
+        public ICollectionView ChocolateySettingsView
+        {
+            get { return CollectionViewSource.GetDefaultView(ChocolateySettings); }
+        }
 
         public bool CanSave => SelectedSource != null;
 
@@ -174,15 +266,26 @@ namespace ChocolateyGui.Common.Windows.ViewModels
             if (feature.Enabled)
             {
                 configuration.FeatureCommand.Command = FeatureCommandType.Enable;
-                await Task.Run(() => _configService.EnableFeature(configuration));
+                await Task.Run(() => _configService.ToggleFeature(configuration, true));
             }
             else
             {
                 configuration.FeatureCommand.Command = FeatureCommandType.Disable;
-                await Task.Run(() => _configService.DisableFeature(configuration));
+                await Task.Run(() => _configService.ToggleFeature(configuration, false));
             }
 
             _eventAggregator.PublishOnUIThread(new FeatureModifiedMessage());
+
+            if (feature.Title == "ShowAggregatedSourceView")
+            {
+                await _eventAggregator.PublishOnUIThreadAsync(new SourcesUpdatedMessage());
+            }
+
+            if (feature.Title == "DefaultToDarkMode")
+            {
+                ThemeAssist.BundledTheme.IsLightTheme = !feature.Enabled;
+                ThemeAssist.BundledTheme.ToggleTheme.Execute(null);
+            }
         }
 
         public async Task UpdateChocolateyGuiSetting(ChocolateyGuiSetting setting)
@@ -203,7 +306,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
             }
             catch (UnauthorizedAccessException)
             {
-                await _progressService.ShowMessageAsync(
+                await _dialogService.ShowMessageAsync(
                     Resources.General_UnauthorisedException_Title,
                     Resources.General_UnauthorisedException_Description);
             }
@@ -216,16 +319,9 @@ namespace ChocolateyGui.Common.Windows.ViewModels
 
         public async Task PurgeIconCache()
         {
-            var result = await _dialogCoordinator.ShowMessageAsync(
-                this,
+            var result = await _dialogService.ShowConfirmationMessageAsync(
                 Resources.Dialog_AreYouSureTitle,
-                Resources.Dialog_AreYouSureIconsMessage,
-                MessageDialogStyle.AffirmativeAndNegative,
-                new MetroDialogSettings
-                {
-                    AffirmativeButtonText = Resources.Dialog_Yes,
-                    NegativeButtonText = Resources.Dialog_No
-                });
+                Resources.Dialog_AreYouSureIconsMessage);
 
             if (result == MessageDialogResult.Affirmative)
             {
@@ -235,16 +331,9 @@ namespace ChocolateyGui.Common.Windows.ViewModels
 
         public async Task PurgeOutdatedPackagesCache()
         {
-            var result = await _dialogCoordinator.ShowMessageAsync(
-                this,
+            var result = await _dialogService.ShowConfirmationMessageAsync(
                 Resources.Dialog_AreYouSureTitle,
-                Resources.Dialog_AreYouSureOutdatedPackagesMessage,
-                MessageDialogStyle.AffirmativeAndNegative,
-                new MetroDialogSettings
-                {
-                    AffirmativeButtonText = Resources.Dialog_Yes,
-                    NegativeButtonText = Resources.Dialog_No
-                });
+                Resources.Dialog_AreYouSureOutdatedPackagesMessage);
 
             if (result == MessageDialogResult.Affirmative)
             {
@@ -257,17 +346,17 @@ namespace ChocolateyGui.Common.Windows.ViewModels
             SelectedSource = new ChocolateySource();
         }
 
-        public async void Save()
+        public async Task Save()
         {
             if (string.IsNullOrWhiteSpace(DraftSource.Id))
             {
-                await _progressService.ShowMessageAsync(Resources.SettingsViewModel_SavingSource, Resources.SettingsViewModel_SourceMissingId);
+                await _dialogService.ShowMessageAsync(Resources.SettingsViewModel_SavingSource, Resources.SettingsViewModel_SourceMissingId);
                 return;
             }
 
             if (string.IsNullOrWhiteSpace(DraftSource.Value))
             {
-                await _progressService.ShowMessageAsync(Resources.SettingsViewModel_SavingSource, Resources.SettingsViewModel_SourceMissingValue);
+                await _dialogService.ShowMessageAsync(Resources.SettingsViewModel_SavingSource, Resources.SettingsViewModel_SourceMissingValue);
                 return;
             }
 
@@ -279,7 +368,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                     if (DraftSource.Id == ChocolateyLicensedSourceId)
                     {
                         await _progressService.StopLoading();
-                        await _progressService.ShowMessageAsync(Resources.SettingsViewModel_SavingSource, Resources.SettingsViewModel_InvalidSourceId);
+                        await _dialogService.ShowMessageAsync(Resources.SettingsViewModel_SavingSource, Resources.SettingsViewModel_InvalidSourceId);
                         return;
                     }
 
@@ -314,7 +403,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
             }
             catch (UnauthorizedAccessException)
             {
-                await _progressService.ShowMessageAsync(
+                await _dialogService.ShowMessageAsync(
                     Resources.General_UnauthorisedException_Title,
                     Resources.General_UnauthorisedException_Description);
             }
@@ -325,25 +414,32 @@ namespace ChocolateyGui.Common.Windows.ViewModels
             }
         }
 
-        public async void Remove()
+        public async Task Remove()
         {
-            await _progressService.StartLoading(Resources.SettingsViewModel_RemovingSource);
-            try
+            var result = await _dialogService.ShowConfirmationMessageAsync(
+                Resources.Dialog_AreYouSureTitle,
+                string.Format(Resources.Dialog_AreYourSureRemoveSourceMessage, _originalId));
+
+            if (result == MessageDialogResult.Affirmative)
             {
-                await _chocolateyService.RemoveSource(_originalId);
-                Sources.Remove(SelectedSource);
-                SelectedSource = null;
-                await _eventAggregator.PublishOnUIThreadAsync(new SourcesUpdatedMessage());
-            }
-            catch (UnauthorizedAccessException)
-            {
-                await _progressService.ShowMessageAsync(
-                    Resources.General_UnauthorisedException_Title,
-                    Resources.General_UnauthorisedException_Description);
-            }
-            finally
-            {
-                await _progressService.StopLoading();
+                await _progressService.StartLoading(Resources.SettingsViewModel_RemovingSource);
+                try
+                {
+                    await _chocolateyService.RemoveSource(_originalId);
+                    Sources.Remove(SelectedSource);
+                    SelectedSource = null;
+                    await _eventAggregator.PublishOnUIThreadAsync(new SourcesUpdatedMessage());
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    await _dialogService.ShowMessageAsync(
+                        Resources.General_UnauthorisedException_Title,
+                        Resources.General_UnauthorisedException_Description);
+                }
+                finally
+                {
+                    await _progressService.StopLoading();
+                }
             }
         }
 
@@ -375,7 +471,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                 loginDialogSettings.EnablePasswordPreview = true;
             }
 
-            var result = await _dialogCoordinator.ShowLoginAsync(this, Resources.SettingsViewModel_SetSourceUsernameAndPasswordTitle, Resources.SettingsViewModel_SetSourceUsernameAndPasswordMessage, loginDialogSettings);
+            var result = await _dialogService.ShowLoginAsync(Resources.SettingsViewModel_SetSourceUsernameAndPasswordTitle, Resources.SettingsViewModel_SetSourceUsernameAndPasswordMessage, loginDialogSettings);
 
             if (result != null)
             {
@@ -405,7 +501,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                 loginDialogSettings.EnablePasswordPreview = true;
             }
 
-            var result = await _dialogCoordinator.ShowLoginAsync(this, Resources.SettingsViewModel_SetSourceCertificateAndPasswordTitle, Resources.SettingsViewModel_SetSourceCertificateAndPasswordMessage, loginDialogSettings);
+            var result = await _dialogService.ShowLoginAsync(Resources.SettingsViewModel_SetSourceCertificateAndPasswordTitle, Resources.SettingsViewModel_SetSourceCertificateAndPasswordMessage, loginDialogSettings);
 
             if (result != null)
             {
@@ -417,7 +513,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
 
         private async void OnActivated(object sender, ActivationEventArgs activationEventArgs)
         {
-            _config = _configService.GetAppConfiguration();
+            _config = _configService.GetEffectiveConfiguration();
 
             var chocolateyFeatures = await _chocolateyService.GetFeatures();
             foreach (var chocolateyFeature in chocolateyFeatures)
@@ -443,7 +539,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                         .Concat()
                         .Subscribe();
 
-            var chocolateyGuiFeatures = _configService.GetFeatures();
+            var chocolateyGuiFeatures = _configService.GetFeatures(global: false);
             foreach (var chocolateyGuiFeature in chocolateyGuiFeatures)
             {
                 ChocolateyGuiFeatures.Add(chocolateyGuiFeature);
@@ -455,7 +551,7 @@ namespace ChocolateyGui.Common.Windows.ViewModels
                 .Concat()
                 .Subscribe();
 
-            var chocolateyGuiSettings = _configService.GetSettings();
+            var chocolateyGuiSettings = _configService.GetSettings(global: false);
             foreach (var chocolateyGuiSetting in chocolateyGuiSettings)
             {
                 ChocolateyGuiSettings.Add(chocolateyGuiSetting);
@@ -480,6 +576,30 @@ namespace ChocolateyGui.Common.Windows.ViewModels
             _changedChocolateySetting.OnCompleted();
             _changedChocolateyGuiFeature.OnCompleted();
             _changedChocolateyGuiSetting.OnCompleted();
+        }
+
+        private bool FilterChocolateyGuiFeatures(ChocolateyGuiFeature chocolateyGuiFeature)
+        {
+            return ChocolateyGuiFeatureSearchQuery == null
+                   || chocolateyGuiFeature.Title.IndexOf(ChocolateyGuiFeatureSearchQuery, StringComparison.OrdinalIgnoreCase) != -1;
+        }
+
+        private bool FilterChocolateyGuiSettings(ChocolateyGuiSetting chocolateyGuiSetting)
+        {
+            return ChocolateyGuiSettingSearchQuery == null
+                   || chocolateyGuiSetting.Key.IndexOf(ChocolateyGuiSettingSearchQuery, StringComparison.OrdinalIgnoreCase) != -1;
+        }
+
+        private bool FilterChocolateyFeatures(ChocolateyFeature chocolateyFeature)
+        {
+            return ChocolateyFeatureSearchQuery == null
+                   || chocolateyFeature.Name.IndexOf(ChocolateyFeatureSearchQuery, StringComparison.OrdinalIgnoreCase) != -1;
+        }
+
+        private bool FilterChocolateySettings(ChocolateySetting chocolateySetting)
+        {
+            return ChocolateySettingSearchQuery == null
+                   || chocolateySetting.Key.IndexOf(ChocolateySettingSearchQuery, StringComparison.OrdinalIgnoreCase) != -1;
         }
     }
 }

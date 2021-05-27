@@ -18,6 +18,7 @@ using chocolatey.infrastructure.app.services;
 using chocolatey.infrastructure.results;
 using chocolatey.infrastructure.services;
 using ChocolateyGui.Common.Models;
+using ChocolateyGui.Common.Properties;
 using ChocolateyGui.Common.Services;
 using Microsoft.VisualStudio.Threading;
 using NuGet;
@@ -95,7 +96,7 @@ namespace ChocolateyGui.Common.Windows.Services
 
         public async Task<IReadOnlyList<OutdatedPackage>> GetOutdatedPackages(bool includePrerelease = false, string packageName = null, bool forceCheckForOutdatedPackages = false)
         {
-            var preventAutomatedOutdatedPackagesCheck = _configService.GetAppConfiguration().PreventAutomatedOutdatedPackagesCheck;
+            var preventAutomatedOutdatedPackagesCheck = _configService.GetEffectiveConfiguration().PreventAutomatedOutdatedPackagesCheck ?? false;
 
             if (preventAutomatedOutdatedPackagesCheck && !forceCheckForOutdatedPackages)
             {
@@ -104,7 +105,7 @@ namespace ChocolateyGui.Common.Windows.Services
 
             var outdatedPackagesFile = _fileSystem.combine_paths(_localAppDataPath, "outdatedPackages.xml");
 
-            var outdatedPackagesCacheDurationInMinutesSetting = _configService.GetAppConfiguration().OutdatedPackagesCacheDurationInMinutes;
+            var outdatedPackagesCacheDurationInMinutesSetting = _configService.GetEffectiveConfiguration().OutdatedPackagesCacheDurationInMinutes;
             int outdatedPackagesCacheDurationInMinutes = 0;
             if (!string.IsNullOrWhiteSpace(outdatedPackagesCacheDurationInMinutesSetting))
             {
@@ -148,7 +149,7 @@ namespace ChocolateyGui.Common.Windows.Services
                     }
                     catch (Exception ex)
                     {
-                        Logger.Error(ex, "Unable to serialize Outdated Packages Cache file.");
+                        Logger.Error(ex, Resources.Application_OutdatedPackagesError);
                     }
 
                     return results.ToList();
@@ -164,7 +165,8 @@ namespace ChocolateyGui.Common.Windows.Services
             string id,
             string version = null,
             Uri source = null,
-            bool force = false)
+            bool force = false,
+            AdvancedInstall advancedInstallOptions = null)
         {
             using (await Lock.WriteLockAsync())
             {
@@ -190,6 +192,39 @@ namespace ChocolateyGui.Common.Windows.Services
                             if (force)
                             {
                                 config.Force = true;
+                            }
+
+                            if (advancedInstallOptions != null)
+                            {
+                                config.InstallArguments = advancedInstallOptions.InstallArguments;
+                                config.PackageParameters = advancedInstallOptions.PackageParameters;
+                                config.CommandExecutionTimeoutSeconds = advancedInstallOptions.ExecutionTimeoutInSeconds;
+                                config.AdditionalLogFileLocation = advancedInstallOptions.LogFile;
+                                config.Prerelease = advancedInstallOptions.PreRelease;
+                                config.ForceX86 = advancedInstallOptions.Forcex86;
+                                config.OverrideArguments = advancedInstallOptions.OverrideArguments;
+                                config.NotSilent = advancedInstallOptions.NotSilent;
+                                config.ApplyInstallArgumentsToDependencies = advancedInstallOptions.ApplyInstallArgumentsToDependencies;
+                                config.ApplyPackageParametersToDependencies = advancedInstallOptions.ApplyPackageParametersToDependencies;
+                                config.AllowDowngrade = advancedInstallOptions.AllowDowngrade;
+                                config.AllowMultipleVersions = advancedInstallOptions.AllowMultipleVersions;
+                                config.IgnoreDependencies = advancedInstallOptions.IgnoreDependencies;
+                                config.ForceDependencies = advancedInstallOptions.ForceDependencies;
+                                config.SkipPackageInstallProvider = advancedInstallOptions.SkipPowerShell;
+                                config.Features.ChecksumFiles = !advancedInstallOptions.IgnoreChecksums;
+                                config.Features.AllowEmptyChecksums = advancedInstallOptions.AllowEmptyChecksums;
+                                config.Features.AllowEmptyChecksumsSecure = advancedInstallOptions.AllowEmptyChecksumsSecure;
+
+                                if (advancedInstallOptions.RequireChecksums)
+                                {
+                                    config.Features.AllowEmptyChecksums = false;
+                                    config.Features.AllowEmptyChecksumsSecure = false;
+                                }
+
+                                config.DownloadChecksum = advancedInstallOptions.DownloadChecksum;
+                                config.DownloadChecksum64 = advancedInstallOptions.DownloadChecksum64bit;
+                                config.DownloadChecksumType = advancedInstallOptions.DownloadChecksumType;
+                                config.DownloadChecksumType64 = advancedInstallOptions.DownloadChecksumType64bit;
                             }
                         });
 
@@ -222,6 +257,7 @@ namespace ChocolateyGui.Common.Windows.Services
                         config.ListCommand.Page = options.CurrentPage;
                         config.ListCommand.PageSize = options.PageSize;
                         config.Prerelease = options.IncludePrerelease;
+                        config.ListCommand.LocalOnly = false;
                         if (string.IsNullOrWhiteSpace(query) || !string.IsNullOrWhiteSpace(options.SortColumn))
                         {
                             config.ListCommand.OrderByPopularity = string.IsNullOrWhiteSpace(options.SortColumn)
@@ -274,6 +310,29 @@ namespace ChocolateyGui.Common.Windows.Services
             }
 
             return GetMappedPackage(_choco, new PackageResult(nugetPackage, null, chocoConfig.Sources), _mapper);
+        }
+
+        public async Task<List<SemanticVersion>> GetAvailableVersionsForPackageIdAsync(string id, int page, int pageSize, bool includePreRelease)
+        {
+            _choco.Set(
+                config =>
+                {
+                    config.CommandName = "list";
+                    config.Input = id;
+                    config.ListCommand.Exact = true;
+                    config.ListCommand.Page = page;
+                    config.ListCommand.PageSize = pageSize;
+                    config.Prerelease = includePreRelease;
+                    config.AllVersions = true;
+                    config.QuietOutput = true;
+                    config.RegularOutput = false;
+#if !DEBUG
+                                config.Verbose = false;
+#endif // DEBUG
+                });
+            var chocoConfig = _choco.GetConfiguration();
+            var packages = await _choco.ListAsync<PackageResult>();
+            return packages.Select(p => new SemanticVersion(p.Version)).OrderByDescending(p => p.Version).ToList();
         }
 
         public async Task<PackageOperationResult> UninstallPackage(string id, string version, bool force = false)
@@ -371,7 +430,8 @@ namespace ChocolateyGui.Common.Windows.Services
         public async Task<ChocolateyFeature[]> GetFeatures()
         {
             var config = await GetConfigFile();
-            return config.Features.Select(_mapper.Map<ChocolateyFeature>).ToArray();
+            var features = config.Features.Select(_mapper.Map<ChocolateyFeature>);
+            return features.OrderBy(f => f.Name).ToArray();
         }
 
         public async Task SetFeature(ChocolateyFeature feature)
@@ -393,7 +453,8 @@ namespace ChocolateyGui.Common.Windows.Services
         public async Task<ChocolateySetting[]> GetSettings()
         {
             var config = await GetConfigFile();
-            return config.ConfigSettings.Select(_mapper.Map<ChocolateySetting>).ToArray();
+            var settings = config.ConfigSettings.Select(_mapper.Map<ChocolateySetting>);
+            return settings.OrderBy(s => s.Key).ToArray();
         }
 
         public async Task SetSetting(ChocolateySetting setting)
