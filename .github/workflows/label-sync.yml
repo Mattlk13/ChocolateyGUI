@@ -14,6 +14,10 @@ on:
     # Uncomment the following line if using a repository specific label file, also remove this comment line
     #  - '.github/labels.yml'
 
+permissions:
+  contents: read
+  issues: read
+
 jobs:
   labels:
     # We use ubuntu as the image, as it is typically faster and cheaper (on private repos).
@@ -30,10 +34,10 @@ jobs:
             https://raw.githubusercontent.com/chocolatey/.github/main/.github/labels.yml
       # Uncomment the following line if using a repository specific label file, also remove this comment line
       #      .github/labels.yml
-          request-token: ${{ secrets.SYNC_TOKEN }} # Used when getting the config files.
+          request-token: ${{ github.token }} # Used when getting the config files.
           delete-other-labels: false # After initial run, and verification change this to true
           dry-run: true
-          token: ${{ secrets.SYNC_TOKEN }} # Used when updating the labels on the repository.
+          token: ${{ github.token }} # Used when updating the labels on the repository.
 
 
 
